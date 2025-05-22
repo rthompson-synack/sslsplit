@@ -258,8 +258,7 @@ opts_proto_dbg_dump(opts_t *opts)
 #ifdef HAVE_TLSV12
 	               (opts->sslmethod == TLSv1_2_method) ? "tls12" :
 #endif /* HAVE_TLSV12 */
-/* There is no TLSv1_3_method defined,
- * since no ssl version < 0x10100000L supports it. */
+
 #else /* OPENSSL_VERSION_NUMBER >= 0x10100000L */
 #ifdef HAVE_SSLV3
 	               (opts->sslversion == SSL3_VERSION) ? "ssl3" :
@@ -921,8 +920,18 @@ opts_force_proto(opts_t *opts, const char *argv0, const char *optarg)
 		opts->sslmethod = TLSv1_2_method;
 	} else
 #endif /* HAVE_TLSV12 */
-/* There is no TLSv1_3_method defined,
- * since no ssl version < 0x10100000L supports it. */
+#ifdef HAVE_TLSV13
+	if (!strcmp(optarg, "tls13")) {
+		fprintf(stderr, "%s: TLS 1.3 in 'force protocol' mode requires OpenSSL ≥ 1.1.1\n", 
+		                argv0);
+		exit(EXIT_FAILURE);
+	} else
+#endif /* HAVE_TLSV13 */
+	{
+		fprintf(stderr, "%s: Unsupported SSL/TLS protocol '%s'\n",
+		                argv0, optarg);
+		exit(EXIT_FAILURE);
+	}
 #else /* OPENSSL_VERSION_NUMBER >= 0x10100000L */
 /*
  * Support for SSLv2 and the corresponding SSLv2_method(),

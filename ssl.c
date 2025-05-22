@@ -1209,7 +1209,11 @@ ssl_x509chain_load(X509 **crt, STACK_OF(X509) **chain, const char *filename)
 	if (ssl_init() == -1)
 		return -1;
 
-	tmpctx = SSL_CTX_new(SSLv23_server_method());
+#if (OPENSSL_VERSION_NUMBER < 0x10100000L) || defined(LIBRESSL_VERSION_NUMBER)
+	tmpctx = SSL_CTX_new(SSLv23_server_method()); /* For OpenSSL < 1.1.0 */
+#else /* OpenSSL >= 1.1.0 */
+	tmpctx = SSL_CTX_new(TLS_method());
+#endif /* OpenSSL >= 1.1.0 */
 	if (!tmpctx)
 		goto leave1;
 
@@ -1300,7 +1304,11 @@ ssl_x509_load(const char *filename)
 	if (ssl_init() == -1)
 		return NULL;
 
-	tmpctx = SSL_CTX_new(SSLv23_server_method());
+#if (OPENSSL_VERSION_NUMBER < 0x10100000L) || defined(LIBRESSL_VERSION_NUMBER)
+	tmpctx = SSL_CTX_new(SSLv23_server_method()); /* For OpenSSL < 1.1.0 */
+#else /* OpenSSL >= 1.1.0 */
+	tmpctx = SSL_CTX_new(TLS_method());
+#endif /* OpenSSL >= 1.1.0 */
 	if (!tmpctx)
 		goto leave1;
 	rv = SSL_CTX_use_certificate_file(tmpctx, filename, SSL_FILETYPE_PEM);
@@ -1335,7 +1343,11 @@ ssl_key_load(const char *filename)
 	if (ssl_init() == -1)
 		return NULL;
 
-	tmpctx = SSL_CTX_new(SSLv23_server_method());
+#if (OPENSSL_VERSION_NUMBER < 0x10100000L) || defined(LIBRESSL_VERSION_NUMBER)
+	tmpctx = SSL_CTX_new(SSLv23_server_method()); /* For OpenSSL < 1.1.0 */
+#else /* OpenSSL >= 1.1.0 */
+	tmpctx = SSL_CTX_new(TLS_method());
+#endif /* OpenSSL >= 1.1.0 */
 	if (!tmpctx)
 		goto leave1;
 	rv = SSL_CTX_use_PrivateKey_file(tmpctx, filename, SSL_FILETYPE_PEM);
@@ -1500,11 +1512,15 @@ ssl_x509_fingerprint(X509 *crt, int colons)
 void
 ssl_dh_refcount_inc(DH *dh)
 {
-#if defined(OPENSSL_THREADS) && ((OPENSSL_VERSION_NUMBER < 0x10100000L) || defined(LIBRESSL_VERSION_NUMBER))
+#if (OPENSSL_VERSION_NUMBER < 0x10100000L) || (defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER < 0x2070000fL)
+#if defined(OPENSSL_THREADS)
 	CRYPTO_add(&dh->references, 1, CRYPTO_LOCK_DH);
 #else /* !OPENSSL_THREADS */
-	DH_up_ref(dh);
+	dh->references++;
 #endif /* !OPENSSL_THREADS */
+#else /* OpenSSL >= 1.1.0 */
+	DH_up_ref(dh);
+#endif /* OpenSSL >= 1.1.0 */
 }
 #endif /* !OPENSSL_NO_DH */
 
@@ -1515,11 +1531,15 @@ ssl_dh_refcount_inc(DH *dh)
 void
 ssl_key_refcount_inc(EVP_PKEY *key)
 {
-#if defined(OPENSSL_THREADS) && ((OPENSSL_VERSION_NUMBER < 0x10100000L) || defined(LIBRESSL_VERSION_NUMBER))
+#if (OPENSSL_VERSION_NUMBER < 0x10100000L) || (defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER < 0x2070000fL)
+#if defined(OPENSSL_THREADS)
 	CRYPTO_add(&key->references, 1, CRYPTO_LOCK_EVP_PKEY);
 #else /* !OPENSSL_THREADS */
-	EVP_PKEY_up_ref(key);
+	key->references++;
 #endif /* !OPENSSL_THREADS */
+#else /* OpenSSL >= 1.1.0 */
+	EVP_PKEY_up_ref(key);
+#endif /* OpenSSL >= 1.1.0 */
 }
 
 /*
@@ -1530,11 +1550,15 @@ ssl_key_refcount_inc(EVP_PKEY *key)
 void
 ssl_x509_refcount_inc(X509 *crt)
 {
-#if defined(OPENSSL_THREADS) && ((OPENSSL_VERSION_NUMBER < 0x10100000L) || defined(LIBRESSL_VERSION_NUMBER))
+#if (OPENSSL_VERSION_NUMBER < 0x10100000L) || (defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER < 0x2070000fL)
+#if defined(OPENSSL_THREADS)
 	CRYPTO_add(&crt->references, 1, CRYPTO_LOCK_X509);
 #else /* !OPENSSL_THREADS */
-	X509_up_ref(crt);
+	crt->references++;
 #endif /* !OPENSSL_THREADS */
+#else /* OpenSSL >= 1.1.0 */
+	X509_up_ref(crt);
+#endif /* OpenSSL >= 1.1.0 */
 }
 
 /*
@@ -2032,6 +2056,7 @@ len3(uint8_t p0, uint8_t p1, uint8_t p2) {
  * RFC 4366: Transport Layer Security (TLS) Extensions
  * RFC 5246: The Transport Layer Security (TLS) Protocol Version 1.2
  * RFC 6066: Transport Layer Security (TLS) Extensions: Extension Definitions
+ * RFC 8446: The Transport Layer Security (TLS) Protocol Version 1.3
  */
 int
 ssl_tls_clienthello_parse(const unsigned char *buf, ssize_t sz, int search,
@@ -2159,7 +2184,7 @@ ssl_tls_clienthello_parse(const unsigned char *buf, ssize_t sz, int search,
 		 * updated for TLS 1.3 once that is standardized and still
 		 * compatible with this parser; remember to also update the
 		 * inner version check below */
-		if (p[0] != 0x03 || p[1] > 0x03)
+		if (p[0] != 0x03 || p[1] > 0x04) /* Updated to support TLS 1.3 (0x03 0x04) */
 			continue;
 		p += 2; n -= 2;
 
@@ -2211,7 +2236,7 @@ ssl_tls_clienthello_parse(const unsigned char *buf, ssize_t sz, int search,
 			continue;
 		DBG_printf("clienthello version %02x %02x\n", p[0], p[1]);
 		/* inner version check, see outer one above */
-		if (p[0] != 0x03 || p[1] > 0x03)
+		if (p[0] != 0x03 || p[1] > 0x04) /* Updated to support TLS 1.3 (0x03 0x04) */
 			continue;
 		p += 2; n -= 2;
 
@@ -2284,7 +2309,7 @@ ssl_tls_clienthello_parse(const unsigned char *buf, ssize_t sz, int search,
 			if (n < extlen)
 				goto continue_search;
 			switch (exttype) {
-			case 0: {
+			case 0: { /* Server Name Indication extension */
 				ssize_t extn = extlen;
 				const unsigned char *extp = p;
 
@@ -2332,6 +2357,19 @@ ssl_tls_clienthello_parse(const unsigned char *buf, ssize_t sz, int search,
 					extp += snlen;
 					extn -= snlen;
 				}
+				break;
+			}
+			case 43: { /* Supported Versions extension (TLS 1.3) */
+				/* In TLS 1.3, the ClientHello.legacy_version is set to 0x0303 (TLS 1.2) 
+				 * and the real versions are in this extension */
+				DBG_printf("Supported Versions extension\n");
+				/* We don't need to parse this as we already accepted 
+				 * the ClientHello in the version checks above */
+				break;
+			}
+			case 51: { /* Key Share extension (TLS 1.3) */
+				DBG_printf("Key Share extension\n");
+				/* TLS 1.3 specific extension - no special handling needed */
 				break;
 			}
 			default:
