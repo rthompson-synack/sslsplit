@@ -89,6 +89,7 @@ START_TEST(cache_tgcrt_03)
 }
 END_TEST
 
+#if (OPENSSL_VERSION_NUMBER < 0x10100000L) || (defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER < 0x2070000fL)
 START_TEST(cache_tgcrt_04)
 {
 	cert_t *c1, *c2;
@@ -118,6 +119,7 @@ START_TEST(cache_tgcrt_04)
 	fail_unless(cachemgr_preinit() != -1, "reinit");
 }
 END_TEST
+#endif
 
 Suite *
 cachetgcrt_suite(void)
@@ -132,7 +134,9 @@ cachetgcrt_suite(void)
 	tcase_add_test(tc, cache_tgcrt_01);
 	tcase_add_test(tc, cache_tgcrt_02);
 	tcase_add_test(tc, cache_tgcrt_03);
+#if (OPENSSL_VERSION_NUMBER < 0x10100000L) || (defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER < 0x2070000fL)
 	tcase_add_test(tc, cache_tgcrt_04);
+#endif
 	suite_add_tcase(s, tc);
 
 	return s;

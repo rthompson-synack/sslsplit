@@ -209,32 +209,6 @@ typedef struct pxy_conn_ctx {
 #define WANT_CONTENT_LOG(ctx)	(((ctx)->opts->contentlog||(ctx)->opts->pcaplog)&&!(ctx)->passthrough)
 #endif /* WITHOUT_MIRROR */
 
-static void
-add_line_to_content_log(const char *line, logbuf_t **plb, logbuf_t **ptail) {
-	logbuf_t *tmp;
-	tmp = logbuf_new_printf(NULL, "%s\r\n", line);
-	if (tmp) {
-		if (*ptail) {
-			(*ptail)->next = tmp;
-			(*ptail) = (*ptail)->next;
-		} else {
-			*plb = *ptail = tmp;
-		}
-	}
-}
-
-static void
-submit_content_logbuf_free(pxy_conn_ctx_t *ctx, logbuf_t *lb, int is_req) {
-	if (lb) {
-		if (log_content_submit(&ctx->logctx, lb,
-	                           is_req) == -1) {
-			logbuf_free(lb);
-			log_err_printf("Warning: Content log "
-			               "submission failed\n");
-		}
-	}
-}
-
 static pxy_conn_ctx_t *
 pxy_conn_ctx_new(proxyspec_t *spec, opts_t *opts,
                  pxy_thrmgr_ctx_t *thrmgr, evutil_socket_t fd)
@@ -480,6 +454,7 @@ pxy_log_connect_nonhttp(pxy_conn_ctx_t *ctx)
 	}
 	if (ctx->opts->connectlog) {
 		if (log_connect_print_free(msg) == -1) {
+			free(msg);
 			log_err_printf("Warning: Connection logging failed\n");
 		}
 	} else {
@@ -592,6 +567,7 @@ pxy_log_connect_http(pxy_conn_ctx_t *ctx)
 	}
 	if (ctx->opts->connectlog) {
 		if (log_connect_print_free(msg) == -1) {
+			free(msg);
 			log_err_printf("Warning: Connection logging failed\n");
 		}
 	} else {
@@ -746,10 +722,7 @@ pxy_sslctx_setoptions(SSL_CTX *sslctx, pxy_conn_ctx_t *ctx)
 		SSL_CTX_set_options(sslctx, SSL_OP_NO_TLSv1_2);
 	}
 #endif /* HAVE_TLSV12 */
-#ifdef HAVE_TLSV13
-	if (ctx->opts->no_tls13)
-		SSL_CTX_set_options(sslctx, SSL_OP_NO_TLSv1_3);
-#endif /* HAVE_TLSV13 */
+
 #ifdef SSL_OP_NO_COMPRESSION
 	if (!ctx->opts->sslcomp) {
 		SSL_CTX_set_options(sslctx, SSL_OP_NO_COMPRESSION);
@@ -1332,10 +1305,7 @@ bufferevent_free_and_close_fd(struct bufferevent *bev, pxy_conn_ctx_t *ctx)
 		}
 		SSL_free(ssl);
 	}
-	/* bufferevent_getfd() returns -1 if no file descriptor is associated
-	 * with the bufferevent */
-	if (fd >= 0)
-		evutil_closesocket(fd);
+	evutil_closesocket(fd);
 }
 
 /*
@@ -1651,20 +1621,16 @@ deny:
 			lb = logbuf_new_alloc(evbuffer_get_length(inbuf), NULL);
 			if (lb &&
 			    (evbuffer_copyout(inbuf, lb->buf, lb->sz) != -1)) {
-				submit_content_logbuf_free(ctx, lb, 1/*req*/);
+				if (log_content_submit(&ctx->logctx, lb,
+				                       1/*req*/) == -1) {
+					logbuf_free(lb);
+					log_err_printf("Warning: Content log "
+					               "submission failed\n");
+				}
 			}
 		}
 		evbuffer_drain(inbuf, evbuffer_get_length(inbuf));
 	}
-
-	struct bufferevent *ubev = bufferevent_get_underlying(ctx->src.bev);
-	if (ubev) {
-		struct evbuffer *ubev_inbuf = bufferevent_get_input(ubev);
-		size_t ubev_inbuf_size = evbuffer_get_length(ubev_inbuf);
-		if (ubev_inbuf_size)
-			evbuffer_drain(ubev_inbuf, ubev_inbuf_size);
-	}
-
 	bufferevent_free_and_close_fd(ctx->dst.bev, ctx);
 	ctx->dst.bev = NULL;
 	ctx->dst.closed = 1;
@@ -1673,7 +1639,14 @@ deny:
 	if (WANT_CONTENT_LOG(ctx)) {
 		logbuf_t *lb;
 		lb = logbuf_new_copy(ocspresp, sizeof(ocspresp) - 1, NULL);
-		submit_content_logbuf_free(ctx, lb, 0/*resp*/);
+		if (lb) {
+			if (log_content_submit(&ctx->logctx, lb,
+			                       0/*resp*/) == -1) {
+				logbuf_free(lb);
+				log_err_printf("Warning: Content log "
+				               "submission failed\n");
+			}
+		}
 	}
 }
 
@@ -1797,14 +1770,6 @@ pxy_bev_readcb(struct bufferevent *bev, void *arg)
 		log_dbg_printf("Warning: Drained %zu bytes (conn closed)\n",
 		               evbuffer_get_length(inbuf));
 		evbuffer_drain(inbuf, evbuffer_get_length(inbuf));
-
-		struct bufferevent *ubev = bufferevent_get_underlying(bev);
-		if (ubev) {
-			struct evbuffer *ubev_inbuf = bufferevent_get_input(ubev);
-			log_dbg_printf("Warning: Drained %zu bytes underlying (conn closed)\n",
-						   evbuffer_get_length(ubev_inbuf));
-			evbuffer_drain(ubev_inbuf, evbuffer_get_length(ubev_inbuf));
-		}
 		return;
 	}
 
@@ -1819,16 +1784,25 @@ pxy_bev_readcb(struct bufferevent *bev, void *arg)
 		                               EVBUFFER_EOL_CRLF))) {
 			char *replace;
 			if (WANT_CONTENT_LOG(ctx)) {
-				add_line_to_content_log(line, &lb, &tail);
+				logbuf_t *tmp;
+				tmp = logbuf_new_printf(NULL, "%s\r\n", line);
+				if (tail) {
+					if (tmp) {
+						tail->next = tmp;
+						tail = tail->next;
+					}
+				} else {
+					lb = tail = tmp;
+				}
 			}
 			replace = pxy_http_reqhdr_filter_line(line, ctx);
-			if (replace != line) {
-				free(line);
-			}
-			if (replace) {
+			if (replace == line) {
+				evbuffer_add_printf(outbuf, "%s\r\n", line);
+			} else if (replace) {
 				evbuffer_add_printf(outbuf, "%s\r\n", replace);
 				free(replace);
 			}
+			free(line);
 			if (ctx->seen_req_header) {
 				/* request header complete */
 				if (ctx->opts->deny_ocsp) {
@@ -1837,8 +1811,13 @@ pxy_bev_readcb(struct bufferevent *bev, void *arg)
 				break;
 			}
 		}
-		if (WANT_CONTENT_LOG(ctx)) {
-			submit_content_logbuf_free(ctx, lb, 1/*req*/);
+		if (lb && WANT_CONTENT_LOG(ctx)) {
+			if (log_content_submit(&ctx->logctx, lb,
+			                       1/*req*/) == -1) {
+				logbuf_free(lb);
+				log_err_printf("Warning: Content log "
+				               "submission failed\n");
+			}
 		}
 		if (!ctx->seen_req_header)
 			return;
@@ -1852,7 +1831,16 @@ pxy_bev_readcb(struct bufferevent *bev, void *arg)
 		                               EVBUFFER_EOL_CRLF))) {
 			char *replace;
 			if (WANT_CONTENT_LOG(ctx)) {
-				add_line_to_content_log(line, &lb, &tail);
+				logbuf_t *tmp;
+				tmp = logbuf_new_printf(NULL, "%s\r\n", line);
+				if (tail) {
+					if (tmp) {
+						tail->next = tmp;
+						tail = tail->next;
+					}
+				} else {
+					lb = tail = tmp;
+				}
 			}
 			replace = pxy_http_resphdr_filter_line(line, ctx);
 			if (replace == line) {
@@ -1870,8 +1858,13 @@ pxy_bev_readcb(struct bufferevent *bev, void *arg)
 				break;
 			}
 		}
-		if (WANT_CONTENT_LOG(ctx)) {
-			submit_content_logbuf_free(ctx, lb, 0/*resp*/);
+		if (lb && WANT_CONTENT_LOG(ctx)) {
+			if (log_content_submit(&ctx->logctx, lb,
+			                       0/*resp*/) == -1) {
+				logbuf_free(lb);
+				log_err_printf("Warning: Content log "
+				               "submission failed\n");
+			}
 		}
 		if (!ctx->seen_resp_header)
 			return;
@@ -1891,24 +1884,21 @@ pxy_bev_readcb(struct bufferevent *bev, void *arg)
 		logbuf_t *lb;
 		lb = logbuf_new_alloc(evbuffer_get_length(inbuf), NULL);
 		if (lb && (evbuffer_copyout(inbuf, lb->buf, lb->sz) != -1)) {
-			submit_content_logbuf_free(ctx, lb, (bev == ctx->src.bev));
+			if (log_content_submit(&ctx->logctx, lb,
+			                       (bev == ctx->src.bev)) == -1) {
+				logbuf_free(lb);
+				log_err_printf("Warning: Content log "
+				               "submission failed\n");
+			}
 		}
 	}
 	evbuffer_add_buffer(outbuf, inbuf);
-
-	struct bufferevent *ubev_other = bufferevent_get_underlying(other->bev);
-	if (evbuffer_get_length(outbuf) >= OUTBUF_LIMIT ||
-			(ubev_other && evbuffer_get_length(bufferevent_get_output(ubev_other)) >= OUTBUF_LIMIT)) {
+	if (evbuffer_get_length(outbuf) >= OUTBUF_LIMIT) {
 		/* temporarily disable data source;
 		 * set an appropriate watermark. */
 		bufferevent_setwatermark(other->bev, EV_WRITE,
 				OUTBUF_LIMIT/2, OUTBUF_LIMIT);
 		bufferevent_disable(bev, EV_READ);
-
-		/* The watermark for ubev_other may be already set, see writecb,
-		 * but getting is equally expensive as setting */
-		if (ubev_other)
-			bufferevent_setwatermark(ubev_other, EV_WRITE, OUTBUF_LIMIT/2, OUTBUF_LIMIT);
 	}
 }
 
@@ -1932,9 +1922,7 @@ pxy_bev_writecb(struct bufferevent *bev, void *arg)
 
 	if (other->closed) {
 		struct evbuffer *outbuf = bufferevent_get_output(bev);
-		struct bufferevent *ubev = bufferevent_get_underlying(bev);
-		if (evbuffer_get_length(outbuf) == 0 &&
-				(!ubev || evbuffer_get_length(bufferevent_get_output(ubev)) == 0)) {
+		if (evbuffer_get_length(outbuf) == 0) {
 			/* finished writing and other end is closed;
 			 * close this end too and clean up memory */
 			bufferevent_free_and_close_fd(bev, ctx);
@@ -1948,13 +1936,6 @@ pxy_bev_writecb(struct bufferevent *bev, void *arg)
 		 * re-enable and reset watermark to 0. */
 		bufferevent_setwatermark(bev, EV_WRITE, 0, 0);
 		bufferevent_enable(other->bev, EV_READ);
-
-		/* Do not reset the watermark for ubev without checking its buf len,
-		 * because the current write event may be due to the buf len of bev
-		 * falling below OUTBUF_LIMIT/2, not that of ubev */
-		struct bufferevent *ubev = bufferevent_get_underlying(bev);
-		if (ubev && evbuffer_get_length(bufferevent_get_output(ubev)) < OUTBUF_LIMIT/2)
-			bufferevent_setwatermark(ubev, EV_WRITE, 0, 0);
 	}
 }
 
@@ -2289,10 +2270,9 @@ connected:
 			/* if the other end is still open and doesn't have data
 			 * to send, close it, otherwise its writecb will close
 			 * it after writing what's left in the output buffer */
-			struct evbuffer *outbuf = bufferevent_get_output(other->bev);
-			struct bufferevent *ubev_other = bufferevent_get_underlying(other->bev);
-			if (evbuffer_get_length(outbuf) == 0 &&
-					(!ubev_other || evbuffer_get_length(bufferevent_get_output(ubev_other)) == 0)) {
+			struct evbuffer *outbuf;
+			outbuf = bufferevent_get_output(other->bev);
+			if (evbuffer_get_length(outbuf) == 0) {
 				bufferevent_free_and_close_fd(other->bev, ctx);
 				other->bev = NULL;
 				other->closed = 1;
@@ -2317,22 +2297,6 @@ connected:
 			                    evbuffer_get_length(
 			                    bufferevent_get_output(other->bev))
 			                );
-			struct bufferevent *ubev = bufferevent_get_underlying(bev);
-			struct bufferevent *ubev_other = other->closed ?
-				NULL : bufferevent_get_underlying(other->bev);
-			if (ubev || ubev_other) {
-				log_dbg_printf("underlying evbuffer size at EOF: "
-							   "i:%zu o:%zu i:%zu o:%zu\n",
-								ubev ? evbuffer_get_length(
-									bufferevent_get_input(ubev)) : 0,
-								ubev ? evbuffer_get_length(
-									bufferevent_get_output(ubev)) : 0,
-								ubev_other ? evbuffer_get_length(
-									bufferevent_get_input(ubev_other)) : 0,
-								ubev_other ? evbuffer_get_length(
-									bufferevent_get_output(ubev_other)) : 0
-								);
-			}
 		}
 #endif /* DEBUG_PROXY */
 		if (!ctx->connected) {
@@ -2350,9 +2314,8 @@ connected:
 			 * have data to send, close it, otherwise its
 			 * writecb will close it after writing what's
 			 * left in the output buffer. */
-			struct bufferevent *ubev_other = bufferevent_get_underlying(other->bev);
-			if (evbuffer_get_length(bufferevent_get_output(other->bev)) == 0 &&
-					(!ubev_other || evbuffer_get_length(bufferevent_get_output(ubev_other)) == 0)) {
+			if (evbuffer_get_length(
+			    bufferevent_get_output(other->bev)) == 0) {
 				bufferevent_free_and_close_fd(other->bev, ctx);
 				other->bev = NULL;
 				other->closed = 1;

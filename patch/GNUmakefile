@@ -386,22 +386,19 @@ TPKG_LDFLAGS+=	-L$(CHECK_FOUND)/lib
 TPKG_LIBS+=	-lcheck
 endif
 
-# Define pkg-config commands with fallbacks
-PKG_CONFIG_LIBS_L = $(shell $(PKGCONFIG) $(PCFLAGS) --libs-only-l $(PKGS) 2>/dev/null || echo "-lssl -lcrypto -levent -levent_openssl -levent_pthreads -lpcap -lnet")
-TPKG_CONFIG_LIBS_L = $(shell $(PKGCONFIG) $(PCFLAGS) --libs-only-l $(TPKGS) 2>/dev/null || echo "-lcheck")
-
+ifneq (,$(strip $(PKGS)))
 PKG_CFLAGS+=	$(shell $(PKGCONFIG) $(PCFLAGS) --cflags-only-other $(PKGS))
 PKG_CPPFLAGS+=	$(shell $(PKGCONFIG) $(PCFLAGS) --cflags-only-I $(PKGS))
 PKG_LDFLAGS+=	$(shell $(PKGCONFIG) $(PCFLAGS) --libs-only-L \
-		$(PKGS) 2>/dev/null || echo "")
-PKG_LIBS+=	$(PKG_CONFIG_LIBS_L)
-
+		--libs-only-other $(PKGS))
+PKG_LIBS+=	$(shell $(PKGCONFIG) $(PCFLAGS) --libs-only-l $(PKGS))
+endif
 ifneq (,$(strip $(TPKGS)))
 TPKG_CFLAGS+=	$(shell $(PKGCONFIG) $(PCFLAGS) --cflags-only-other $(TPKGS))
 TPKG_CPPFLAGS+=	$(shell $(PKGCONFIG) $(PCFLAGS) --cflags-only-I $(TPKGS))
 TPKG_LDFLAGS+=	$(shell $(PKGCONFIG) $(PCFLAGS) --libs-only-L \
-		$(TPKGS) 2>/dev/null || echo "")
-TPKG_LIBS+=	$(TPKG_CONFIG_LIBS_L)
+		--libs-only-other $(TPKGS))
+TPKG_LIBS+=	$(shell $(PKGCONFIG) $(PCFLAGS) --libs-only-l $(TPKGS))
 endif
 
 CPPDEFS+=	-D_GNU_SOURCE \
