@@ -143,6 +143,9 @@ opts_free(opts_t *opts)
 	if (opts->ciphers) {
 		free(opts->ciphers);
 	}
+	if (opts->ciphersuites) {
+		free(opts->ciphersuites);
+	}
 #ifndef OPENSSL_NO_ENGINE
 	if (opts->openssl_engine) {
 		free(opts->openssl_engine);
@@ -238,7 +241,7 @@ opts_has_dns_spec(opts_t *opts)
 void
 opts_proto_dbg_dump(opts_t *opts)
 {
-	log_dbg_printf("SSL/TLS protocol: %s%s%s%s%s%s\n",
+	log_dbg_printf("SSL/TLS protocol: %s%s%s%s%s%s%s\n",
 #if (OPENSSL_VERSION_NUMBER < 0x10100000L) || defined(LIBRESSL_VERSION_NUMBER)
 #ifdef HAVE_SSLV2
 	               (opts->sslmethod == SSLv2_method) ? "ssl2" :
@@ -255,7 +258,7 @@ opts_proto_dbg_dump(opts_t *opts)
 #ifdef HAVE_TLSV12
 	               (opts->sslmethod == TLSv1_2_method) ? "tls12" :
 #endif /* HAVE_TLSV12 */
-/* Note: We don't check for TLSv1_3_method as it may not be available in some OpenSSL versions */
+
 #else /* OPENSSL_VERSION_NUMBER >= 0x10100000L */
 #ifdef HAVE_SSLV3
 	               (opts->sslversion == SSL3_VERSION) ? "ssl3" :
@@ -293,6 +296,7 @@ opts_proto_dbg_dump(opts_t *opts)
 #ifdef HAVE_TLSV12
 	               opts->no_tls12 ? " -tls12" :
 #endif /* HAVE_TLSV12 */
+	               "",
 #ifdef HAVE_TLSV13
 	               opts->no_tls13 ? " -tls13" :
 #endif /* HAVE_TLSV13 */
@@ -843,6 +847,19 @@ opts_set_ciphers(opts_t *opts, const char *argv0, const char *optarg)
 		oom_die(argv0);
 #ifdef DEBUG_OPTS
 	log_dbg_printf("Ciphers: %s\n", opts->ciphers);
+#endif /* DEBUG_OPTS */
+}
+
+void
+opts_set_ciphersuites(opts_t *opts, const char *argv0, const char *optarg)
+{
+	if (opts->ciphersuites)
+		free(opts->ciphersuites);
+	opts->ciphersuites = strdup(optarg);
+	if (!opts->ciphersuites)
+		oom_die(argv0);
+#ifdef DEBUG_OPTS
+	log_dbg_printf("CipherSuites: %s\n", opts->ciphersuites);
 #endif /* DEBUG_OPTS */
 }
 
@@ -1476,6 +1493,8 @@ set_option(opts_t *opts, const char *argv0,
 		opts_disable_proto(opts, argv0, value);
 	} else if (!strcmp(name, "Ciphers")) {
 		opts_set_ciphers(opts, argv0, value);
+	} else if (!strcmp(name, "CipherSuites")) {
+		opts_set_ciphersuites(opts, argv0, value);
 #ifndef OPENSSL_NO_ENGINE
 	} else if (!strcmp(name, "OpenSSLEngine")) {
 		opts_set_openssl_engine(opts, argv0, value);

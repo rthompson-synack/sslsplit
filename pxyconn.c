@@ -747,9 +747,11 @@ pxy_sslctx_setoptions(SSL_CTX *sslctx, pxy_conn_ctx_t *ctx)
 	}
 #endif /* HAVE_TLSV12 */
 #ifdef HAVE_TLSV13
-	if (ctx->opts->no_tls13)
+	if (ctx->opts->no_tls13) {
 		SSL_CTX_set_options(sslctx, SSL_OP_NO_TLSv1_3);
+	}
 #endif /* HAVE_TLSV13 */
+
 #ifdef SSL_OP_NO_COMPRESSION
 	if (!ctx->opts->sslcomp) {
 		SSL_CTX_set_options(sslctx, SSL_OP_NO_COMPRESSION);
@@ -757,6 +759,9 @@ pxy_sslctx_setoptions(SSL_CTX *sslctx, pxy_conn_ctx_t *ctx)
 #endif /* SSL_OP_NO_COMPRESSION */
 
 	SSL_CTX_set_cipher_list(sslctx, ctx->opts->ciphers);
+#ifdef HAVE_TLSV13
+	SSL_CTX_set_ciphersuites(sslctx, ctx->opts->ciphersuites);
+#endif /* HAVE_TLSV13 */
 
 #if (OPENSSL_VERSION_NUMBER >= 0x10100000L) && !defined(LIBRESSL_VERSION_NUMBER)
 	/*
@@ -766,7 +771,7 @@ pxy_sslctx_setoptions(SSL_CTX *sslctx, pxy_conn_ctx_t *ctx)
 	 * compile-time defaults.  Security levels above 0 will reject weak
 	 * algorithms and key sizes both locally at load time and when they are
 	 * encountered from peers we receive connections from or connect to.
-	 * Specifically, our prevous default RSA leaf key size of 1024 bits
+	 * Specifically, our previous default RSA leaf key size of 1024 bits
 	 * was rejected by a security level of 2 or higher (issue #248).
 	 */
 	SSL_CTX_set_security_level(sslctx, 0);
@@ -1214,6 +1219,18 @@ pxy_dstssl_create(pxy_conn_ctx_t *ctx)
 			return NULL;
 		}
 	}
+#ifdef HAVE_TLSV13
+	// TLS1.3 requires SNI
+	else if (!ctx->sni) {
+		if (OPTS_DEBUG(ctx->opts)) {
+			log_dbg_printf("src lacks SNI name, dst cannot use TLS1.3\n");
+		}
+		if (SSL_CTX_set_max_proto_version(sslctx, TLS1_2_VERSION) == 0) {
+			SSL_CTX_free(sslctx);
+			return NULL;
+		}
+	}
+#endif /* HAVE_TLSV13 */
 #endif /* OPENSSL_VERSION_NUMBER >= 0x10100000L */
 
 	if (ctx->opts->verify_peer) {

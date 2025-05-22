@@ -18,6 +18,8 @@ RUN apk add --no-cache \
 
 # Copy source code
 COPY . /opt/sslsplit
+COPY patch/GNUmakefile /sslsplit/GNUmakefile
+COPY patch/pxyconn.c   /sslsplit/pxyconn.c
 WORKDIR /opt/sslsplit
 
 # Set environment variables for build
